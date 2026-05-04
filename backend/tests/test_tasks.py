@@ -50,8 +50,7 @@ def test_create_task_level1_requires_impl_fields():
     user = mock_get_current_user()
     user.current_device = 1
 
-    from backend.dependencies import get_current_user
-    from backend.database import get_db
+    from backend.dependencies import get_current_user, get_db
 
     with patch("backend.routers.tasks.get_current_user", return_value=user):
         resp = client.post("/tasks", json=make_task_payload())
