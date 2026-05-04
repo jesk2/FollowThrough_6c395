@@ -1,25 +1,32 @@
 """
 APScheduler job definitions.
 
-Two jobs:
-  1. checkin_reminder_job — runs every hour.
-     Finds tasks where planned_start is within the next 2 hours with no check-in.
-     Sends a reminder notification for each.
-
-  2. device_reeval_job — runs every Monday at midnight.
-     For each user: compute 14-day completion rate, run de-escalation check,
-     run BOCD weekly summary, log device changes.
+Three jobs:
+  1. checkin_reminder_job — every hour. Walks pending reminders for tasks
+     starting in the next 2 hours with no check-in.
+  2. bocd_daily_job — every day at 00:05. Ticks each user's BOCD detector
+     with yesterday's completion rate; runs re-evaluation on confirmed drift.
+  3. device_reeval_job — every Monday at 00:00. Runs re-evaluation for every
+     user; logs device changes.
 """
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from backend.database import SessionLocal
-from backend.models import db as models
 from backend import notifications
+from backend.database import SessionLocal
+from backend.ml import get_pending_reminders, on_device_change, run_reevaluation
+from backend.ml.bocd import (
+    load_detector,
+    mark_ticked,
+    save_detector,
+    should_tick_today,
+)
+from backend.models import db as models
+from backend.response_logic import _completion_rate_for_day  # internal helper reuse
 
 logger = logging.getLogger(__name__)
 
@@ -30,102 +37,88 @@ scheduler = AsyncIOScheduler()
 def checkin_reminder_job():
     db = SessionLocal()
     try:
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
-        window_end = now + timedelta(hours=2)
-
-        # tasks starting within the next 2 hours with no check-in
-        checked_in_ids = db.query(models.Checkin.task_id).subquery()
-        due_tasks = (
-            db.query(models.Task)
-            .filter(
-                models.Task.is_active.is_(True),
-                models.Task.planned_start >= now,
-                models.Task.planned_start <= window_end,
-                models.Task.id.not_in(checked_in_ids),
-            )
-            .all()
-        )
-
-        for task in due_tasks:
-            user = db.query(models.User).filter(models.User.id == task.user_id).first()
-            if user:
-                notifications.send_reminder(user.email, task.name, task.planned_start)
-                logger.info("Sent reminder to %s for task '%s'", user.email, task.name)
+        for user, task, payload in get_pending_reminders(db):
+            notifications.send_reminder(user.email, payload["task_name"], payload["planned_start"])
+            logger.info("Sent reminder to %s for task '%s'", user.email, task.name)
     except Exception:
         logger.exception("checkin_reminder_job failed")
     finally:
         db.close()
 
 
-@scheduler.scheduled_job(CronTrigger(day_of_week="mon", hour=0, minute=0), id="device_reeval")
-def device_reeval_job():
-    from backend.ml.recommender import evaluate_device_level
-    from backend.ml.bocd import get_or_create_detector
+@scheduler.scheduled_job(CronTrigger(hour=0, minute=5), id="bocd_daily")
+def bocd_daily_job():
+    """Tick each user's detector once a day with yesterday's completion rate.
 
+    This catches users who haven't checked in today (so the on-checkin tick
+    didn't fire). On confirmed drift, runs re-evaluation immediately.
+    """
     db = SessionLocal()
     try:
+        today = datetime.now(timezone.utc).date()
+        yesterday = today - timedelta(days=1)
         users = db.query(models.User).all()
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
-        cutoff_14d = now - timedelta(days=14)
 
         for user in users:
-            checkins_14d = (
-                db.query(models.Checkin)
-                .filter(
-                    models.Checkin.user_id == user.id,
-                    models.Checkin.checked_in_at >= cutoff_14d,
-                )
-                .all()
-            )
-            if not checkins_14d:
+            detector = load_detector(user)
+            if not should_tick_today(detector, today):
                 continue
 
-            completion_rate = sum(c.completed for c in checkins_14d) / len(checkins_14d)
+            yest_rate = _completion_rate_for_day(user.id, yesterday, db)
+            if yest_rate is None:
+                continue
 
-            # weekly BOCD update
-            detector = get_or_create_detector(str(user.id))
-            cp_prob = detector.update(completion_rate)
+            prior_status = detector.drift_status
+            detector.update(yest_rate)
+            mark_ticked(detector, today)
+            save_detector(user, detector)
 
-            # count consecutive failures
-            recent = (
-                db.query(models.Checkin)
-                .filter(models.Checkin.user_id == user.id)
-                .order_by(models.Checkin.checked_in_at.desc())
-                .limit(10)
-                .all()
-            )
-            failure_streak = 0
-            for c in recent:
-                if c.completed == 0.0:
-                    failure_streak += 1
-                else:
-                    break
-
-            new_device = evaluate_device_level(
-                beta_proxy=user.beta_proxy,
-                proj_bias_score=user.proj_bias_score,
-                drift_flag=cp_prob > 0.5,
-                failure_streak=failure_streak,
-            )
-
-            # de-escalation check: 90%+ completion rate for 2 weeks → drop one level
-            if completion_rate >= 0.90 and new_device > 0:
-                new_device = max(0, user.current_device - 1)
-
-            if new_device != user.current_device:
-                assignment = models.DeviceAssignment(
+            if (
+                detector.drift_status != prior_status
+                and detector.drift_status in ("confirmed_decline", "confirmed_improvement")
+            ):
+                direction = "decline" if detector.drift_status == "confirmed_decline" else "improvement"
+                db.add(models.DriftEvent(
                     user_id=user.id,
-                    device_type=new_device,
-                    beta_at_assignment=user.beta_proxy,
-                    pre_completion_rate=completion_rate,
-                )
-                db.add(assignment)
-                user.current_device = new_device
-                logger.info(
-                    "Device re-evaluated for %s: %d → %d (rate=%.2f)",
-                    user.email, user.current_device, new_device, completion_rate,
-                )
+                    drift_type="level_shift",
+                    direction=direction,
+                    beta_before=user.beta_proxy,
+                ))
+                old_device = user.current_device
+                result = run_reevaluation(user, db)
+                if result.changed:
+                    note = on_device_change(user, old_device, result.recommended_device)
+                    notifications.send_reminder(
+                        user.email,
+                        note.payload.get("message", "Your commitment level changed"),
+                        datetime.utcnow(),
+                    )
 
+        db.commit()
+    except Exception:
+        logger.exception("bocd_daily_job failed")
+    finally:
+        db.close()
+
+
+@scheduler.scheduled_job(CronTrigger(day_of_week="mon", hour=0, minute=0), id="device_reeval")
+def device_reeval_job():
+    db = SessionLocal()
+    try:
+        for user in db.query(models.User).all():
+            old_device = user.current_device
+            result = run_reevaluation(user, db)
+            if result.changed:
+                note = on_device_change(user, old_device, result.recommended_device)
+                notifications.send_reminder(
+                    user.email,
+                    note.payload.get("message", "Your commitment level changed"),
+                    datetime.utcnow(),
+                )
+                logger.info(
+                    "Weekly re-eval for %s: %d → %d (%s)",
+                    user.email, old_device, result.recommended_device, result.reason,
+                )
         db.commit()
     except Exception:
         logger.exception("device_reeval_job failed")

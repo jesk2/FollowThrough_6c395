@@ -58,9 +58,23 @@ class TaskResponse(BaseModel):
     impl_what_first: Optional[str]
     created_at: datetime
     is_active: bool
+    locked: bool = False
     has_checkin: bool = False
 
     model_config = {"from_attributes": True}
+
+
+class RescheduleRequest(BaseModel):
+    new_start: datetime
+    confirmation_token: Optional[str] = None
+
+
+class RescheduleResponseSchema(BaseModel):
+    allowed: bool
+    requires_confirmation: bool
+    confirmation_token: Optional[str] = None
+    reason: Optional[str] = None
+    task: Optional[TaskResponse] = None
 
 
 class TaskListResponse(BaseModel):
@@ -134,7 +148,7 @@ class ProfileResponse(BaseModel):
     device_label: str
     streak: int
     completion_rate_14d: float
-    drift_status: Literal["stable", "shifting", "improving"]
+    drift_status: Literal["stable", "potential", "confirmed_decline", "confirmed_improvement"]
     created_at: datetime
 
     model_config = {"from_attributes": True}

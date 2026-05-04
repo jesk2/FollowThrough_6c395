@@ -5,7 +5,7 @@ from sqlalchemy import (
     Boolean, Column, DateTime, Float, ForeignKey,
     Integer, String,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
 from backend.database import Base
@@ -24,11 +24,13 @@ class User(Base):
     embedding_id = Column(Integer, nullable=True)  # index into CF embedding table
     current_device = Column(Integer, default=0, nullable=False)  # 0–4
     streak = Column(Integer, default=0, nullable=False)
+    detector_state = Column(JSONB, nullable=True)
 
     tasks = relationship("Task", back_populates="user")
     checkins = relationship("Checkin", back_populates="user")
     device_assignments = relationship("DeviceAssignment", back_populates="user")
     drift_events = relationship("DriftEvent", back_populates="user")
+    reschedule_events = relationship("RescheduleEvent", back_populates="user")
 
 
 class Task(Base):
@@ -45,6 +47,7 @@ class Task(Base):
     corrected_duration = Column(Integer, nullable=True)  # set when proj_bias correction applied
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
+    locked = Column(Boolean, default=False, nullable=False)
 
     # Level 1 implementation intention fields
     impl_where = Column(String, nullable=True)
@@ -52,6 +55,7 @@ class Task(Base):
 
     user = relationship("User", back_populates="tasks")
     checkins = relationship("Checkin", back_populates="task")
+    reschedule_events = relationship("RescheduleEvent", back_populates="task")
 
 
 class Checkin(Base):
@@ -96,3 +100,18 @@ class DriftEvent(Base):
     beta_after = Column(Float, nullable=True)  # filled in after re-estimation
 
     user = relationship("User", back_populates="drift_events")
+
+
+class RescheduleEvent(Base):
+    """Audit log of confirmed reschedules of locked tasks."""
+    __tablename__ = "reschedule_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    task_id = Column(UUID(as_uuid=True), ForeignKey("tasks.id"), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    original_start = Column(DateTime, nullable=False)
+    rescheduled_to = Column(DateTime, nullable=False)
+    confirmed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    task = relationship("Task", back_populates="reschedule_events")
+    user = relationship("User", back_populates="reschedule_events")
