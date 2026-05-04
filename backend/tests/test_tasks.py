@@ -50,10 +50,15 @@ def test_create_task_level1_requires_impl_fields():
     user = mock_get_current_user()
     user.current_device = 1
 
-    from backend.dependencies import get_current_user, get_db
+    from backend.dependencies import get_current_user
 
-    with patch("backend.routers.tasks.get_current_user", return_value=user):
+    # FastAPI captures Depends(...) targets at import time, so patching the
+    # module attribute does nothing — must use dependency_overrides.
+    app.dependency_overrides[get_current_user] = lambda: user
+    try:
         resp = client.post("/tasks", json=make_task_payload())
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
     # should reject because impl_where and impl_what_first are missing
     assert resp.status_code == 422
 
