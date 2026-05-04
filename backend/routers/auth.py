@@ -12,7 +12,17 @@ from backend.routers.profile import build_profile_response
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-_supabase = create_client(settings.supabase_url, settings.supabase_service_key)
+# Lazy: Supabase rejects empty/placeholder keys at construction time, which
+# would break module import (and test collection) in environments without
+# real credentials. Build the client on first use instead.
+_supabase = None
+
+
+def _get_supabase():
+    global _supabase
+    if _supabase is None:
+        _supabase = create_client(settings.supabase_url, settings.supabase_service_key)
+    return _supabase
 
 DEVICE_LABELS = ["Salience Nudge", "Implementation Intention", "Planning Correction", "Virtual Stakes", "Precommitment Lock"]
 
@@ -20,7 +30,7 @@ DEVICE_LABELS = ["Salience Nudge", "Implementation Intention", "Planning Correct
 @router.post("/signup", response_model=AuthResponse)
 def signup(body: SignupRequest, db: Session = Depends(get_db)):
     try:
-        resp = _supabase.auth.sign_up({"email": body.email, "password": body.password})
+        resp = _get_supabase().auth.sign_up({"email": body.email, "password": body.password})
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -41,7 +51,7 @@ def signup(body: SignupRequest, db: Session = Depends(get_db)):
 @router.post("/login", response_model=AuthResponse)
 def login(body: LoginRequest):
     try:
-        resp = _supabase.auth.sign_in_with_password({"email": body.email, "password": body.password})
+        resp = _get_supabase().auth.sign_in_with_password({"email": body.email, "password": body.password})
     except Exception as e:
         raise HTTPException(status_code=401, detail=str(e))
 
