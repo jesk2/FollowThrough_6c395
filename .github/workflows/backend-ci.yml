@@ -44,6 +44,7 @@ jobs:
       - name: Run migrations
         working-directory: backend
         env:
+          PYTHONPATH: ${{ github.workspace }}
           DATABASE_URL: postgresql://followthrough:followthrough@localhost:5432/followthrough
           SUPABASE_URL: https://placeholder.supabase.co
           SUPABASE_ANON_KEY: placeholder
@@ -54,6 +55,7 @@ jobs:
       - name: Run tests
         working-directory: backend
         env:
+          PYTHONPATH: ${{ github.workspace }}
           DATABASE_URL: postgresql://followthrough:followthrough@localhost:5432/followthrough
           SUPABASE_URL: https://placeholder.supabase.co
           SUPABASE_ANON_KEY: placeholder
