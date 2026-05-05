@@ -16,7 +16,7 @@ import TaskCard from "../components/TaskCard";
 import AddTaskModal from "../components/AddTaskModal";
 
 // ── flip to false once the backend is running ──────────────────────────────
-const USE_MOCK = true;
+const USE_MOCK = false;
 
 const MOCK_PROFILE = {
   email: "audrey@test.com",

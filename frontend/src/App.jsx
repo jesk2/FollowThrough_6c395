@@ -11,12 +11,12 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
-        {/* <Route element={<ProtectedRoute />}> */}
+        <Route element={<ProtectedRoute />}>
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/add-task" element={<AddTask />} />
           <Route path="/checkin/:taskId" element={<Checkin />} />
           <Route path="/profile" element={<Profile />} />
-        {/* </Route> */}
+        </Route>
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
     </BrowserRouter>

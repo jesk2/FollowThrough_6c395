@@ -10,7 +10,7 @@ const DEADLINE_OPTIONS = [
 ];
 
 // ── flip to false once backend is running ──────────────────────────────────
-const USE_MOCK = true;
+const USE_MOCK = false;
 const MOCK_DEVICE_LEVEL = 1; // change to 0 to hide impl intention fields
 // ──────────────────────────────────────────────────────────────────────────
 
