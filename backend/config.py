@@ -1,4 +1,8 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings
+
+_ENV_FILE = Path(__file__).parent / ".env"
 
 
 class Settings(BaseSettings):
@@ -17,7 +21,7 @@ class Settings(BaseSettings):
     app_env: str = "development"
 
     class Config:
-        env_file = ".env"
+        env_file = _ENV_FILE
 
 
 settings = Settings()
