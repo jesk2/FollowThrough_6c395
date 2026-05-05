@@ -94,16 +94,19 @@ def submit_checkin(
 
     _refresh_cf_and_beta(current_user, task, body.completed)
 
-    if actions.trigger_reevaluation:
-        old_device = current_user.current_device
-        result = run_reevaluation(current_user, db)
-        if result.changed:
-            note = on_device_change(current_user, old_device, result.recommended_device)
-            notif_service.send_reminder(
-                current_user.email,
-                note.payload.get("message", "Your commitment level changed"),
-                datetime.utcnow(),
-            )
+    # Always re-evaluate: the recommender's failure-streak, beta-baseline, and
+    # projection-bias paths must fire on every check-in, not only on confirmed
+    # drift. ``actions.trigger_reevaluation`` still indicates *why* the call
+    # happened (drift event vs. routine), used to pick the notification tone.
+    old_device = current_user.current_device
+    result = run_reevaluation(current_user, db)
+    if result.changed:
+        note = on_device_change(current_user, old_device, result.recommended_device)
+        notif_service.send_reminder(
+            current_user.email,
+            note.payload.get("message", "Your commitment level changed"),
+            datetime.utcnow(),
+        )
 
     db.commit()
     db.refresh(checkin)

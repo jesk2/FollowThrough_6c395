@@ -84,6 +84,24 @@ def test_stable_series_does_not_flag():
     assert d.drift_status == "stable"
 
 
+def test_single_anomaly_does_not_transition_to_potential():
+    """Sustained-elevation gate: one bad day in a stable regime must not flag.
+
+    The cp_score signal can transiently spike from a single anomalous day
+    because the run-length posterior briefly collapses; we require N
+    consecutive elevated days before treating it as a candidate regime shift.
+    """
+    d = BOCDDetector()
+    for _ in range(20):
+        d.update(0.85)
+    d.update(0.05)  # one bad day
+    # Detector may bump consecutive_high_cp but should not transition
+    assert d.drift_status == "stable"
+    # Recover: next stable observation should reset consecutive_high_cp
+    d.update(0.85)
+    assert d.consecutive_high_cp == 0
+
+
 def test_step_change_triggers_changepoint_within_5_days():
     """0.7 for 20 days then 0.3 for 5 days should flag inside the post-drop window."""
     d = BOCDDetector()

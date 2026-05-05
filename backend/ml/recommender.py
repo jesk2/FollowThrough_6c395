@@ -23,6 +23,7 @@ FAILURE_STREAK_THRESHOLD = 3
 DE_ESCALATION_RATE = 0.90
 DE_ESCALATION_WEEKS = 2
 PROJ_BIAS_THRESHOLD = 0.3
+MIN_STAY_WEEKS_FOR_DROP = 1  # baseline drops require ≥ 1 week at current level (anti-thrash)
 
 BETA_LEVEL_1 = 0.65
 BETA_LEVEL_3 = 0.75
@@ -130,6 +131,14 @@ def evaluate(profile: UserProfile) -> RecommendationResult:
 
     # 5. projection-bias override
     if profile.proj_bias_score > PROJ_BIAS_THRESHOLD:
+        # Drop-guarded: don't slide *down* to L2 from a higher level without tenure
+        if 2 < prev and profile.weeks_at_current_level < MIN_STAY_WEEKS_FOR_DROP:
+            return RecommendationResult(
+                recommended_device=prev,
+                reason="proj bias (drop guarded)",
+                changed=False,
+                previous_device=prev,
+            )
         return RecommendationResult(
             recommended_device=2,
             reason="high projection bias",
@@ -137,8 +146,17 @@ def evaluate(profile: UserProfile) -> RecommendationResult:
             previous_device=prev,
         )
 
-    # 6. beta-based baseline
+    # 6. beta-based baseline (drop-guarded: prevents thrashing when β fluctuates
+    # near a threshold or a failure-streak escalation gets undone by the next
+    # noisy success). Increases pass through immediately.
     new = _beta_baseline(profile.beta_proxy)
+    if new < prev and profile.weeks_at_current_level < MIN_STAY_WEEKS_FOR_DROP:
+        return RecommendationResult(
+            recommended_device=prev,
+            reason="beta baseline (drop guarded)",
+            changed=False,
+            previous_device=prev,
+        )
     return RecommendationResult(
         recommended_device=new,
         reason="beta baseline",

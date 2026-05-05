@@ -426,7 +426,13 @@ def on_device_change(user: models.User, old_device: int, new_device: int) -> Not
 
 
 def run_reevaluation(user: models.User, db: Session) -> RecommendationResult:
-    """Build the user's profile from the DB, evaluate, and persist any change."""
+    """Build the user's profile from the DB, evaluate, and persist any change.
+
+    If the profile carries a ``confirmed_*`` drift flag, the detector is reset
+    to ``stable`` afterwards: the drift signal is one-shot (consumed by the
+    recommender on this call) so subsequent reevaluations don't repeatedly
+    escalate/de-escalate the device on the same drift event.
+    """
     profile = _build_user_profile(user, db)
     result = evaluate(profile)
 
@@ -439,6 +445,12 @@ def run_reevaluation(user: models.User, db: Session) -> RecommendationResult:
             pre_completion_rate=rate_14d,
         ))
         user.current_device = result.recommended_device
+
+    if profile.drift_flag in ("confirmed_decline", "confirmed_improvement"):
+        detector = load_detector(user)
+        detector.drift_status = "stable"
+        save_detector(user, detector)
+
     return result
 
 

@@ -26,10 +26,14 @@ from scipy.stats import beta as beta_dist
 CP_THRESHOLD = 0.5            # flag when P(short run) > this
 SHORT_RUN_K = 3               # define "short run" as r <= K
 WARMUP_STEPS = 5              # don't flag during warmup where short-run is trivially likely
-CLASSIFICATION_WINDOW = 5     # days after a flag before classifying it
+CONSEC_HIGH_CP_REQUIRED = 2   # require N consecutive elevated days before flagging
+CLASSIFICATION_WINDOW = 7     # days after a flag before classifying it
 LEVEL_SHIFT_CP_MEAN = 0.3     # mean cp_prob in window must exceed this for level shift
 PRE_FLAG_WINDOW = 14          # days of pre-flag history used for direction comparison
-SHIFT_MAGNITUDE = 0.15        # post-pre mean delta required for direction
+DIRECTION_TAIL = 3            # use last N post-flag obs for direction — short enough to
+                              # let recovery dominate after a transient dip, long enough
+                              # to smooth single-day flukes
+SHIFT_MAGNITUDE = 0.20        # post-pre mean delta required for direction
 PRIOR_ALPHA = 3.0             # Beta prior — mean ~0.67
 PRIOR_B = 1.5
 EPS = 1e-3                    # clip y away from 0 / 1 for Beta PDF stability
@@ -51,6 +55,7 @@ class BOCDDetector:
         self.b: np.ndarray = np.array([PRIOR_B])
 
         self.t: int = 0
+        self.consecutive_high_cp: int = 0  # gates the stable -> potential transition
         self.pending_flag_days: int = 0
         self.drift_status: str = "stable"
         self.last_update_date: Optional[str] = None  # ISO date string
@@ -77,19 +82,24 @@ class BOCDDetector:
         stats, refreshes drift_status / pending_flag_days, and stores the latest
         derived quantities for retrieval via :meth:`last_result`.
         """
+        # scalar float in [EPS, 1-EPS]
         y_clipped = float(np.clip(y, EPS, 1.0 - EPS))
 
         # predictive likelihood of y under each run-length hypothesis
+        # vector of float, length = len(self.run_length_probs); pred_probs[r] = Beta PDF at y for hypothesis r
         pred_probs = beta_dist.pdf(y_clipped, self.alpha, self.b)
 
         # joint = P(y | r_{t-1}, x_{1:t-1}) * P(r_{t-1} | x_{1:t-1})
+        # vector of float, same length as pred_probs; unnormalized joint over old run-length hypotheses
         joint = pred_probs * self.run_length_probs
 
+        # scalar float: total mass routed to r_t = 0 (changepoint bucket)
         cp_prob = float(np.sum(joint) * self.hazard_rate)
+        # vector of float, same length as joint; growth[r] = mass routed to r_t = r+1
         growth = joint * (1.0 - self.hazard_rate)
 
         new_run_length_probs = np.concatenate(([cp_prob], growth))
-        total = new_run_length_probs.sum()
+        total = new_run_length_probs.sum() # for normalization
         if total <= 0 or not np.isfinite(total):
             # numerical collapse — reset to point mass at r=0
             new_run_length_probs = np.array([1.0])
@@ -97,6 +107,7 @@ class BOCDDetector:
             new_run_length_probs = new_run_length_probs / total
 
         # update sufficient stats: prepend fresh prior for r=0, then add (y, 1-y)
+        # new_alpha, new_b: vector of float, length = len(self.alpha)+1; Beta sufficient stats per new run-length hypothesis
         new_alpha = np.concatenate(([PRIOR_ALPHA], self.alpha + y_clipped))
         new_b = np.concatenate(([PRIOR_B], self.b + (1.0 - y_clipped)))
 
@@ -122,7 +133,7 @@ class BOCDDetector:
         self._last_expected_run_length = expected_rl
         self._last_regime_completion_rate = regime_rate
         self._last_flagged = flagged
-        return cp_score
+        return cp_score # high is signal that smth changed
 
     def _compute_regime_rate(self) -> float:
         """E[completion rate] under the current run-length posterior."""
@@ -134,9 +145,20 @@ class BOCDDetector:
             self.pre_flag_rates.append(y)
             if len(self.pre_flag_rates) > PRE_FLAG_WINDOW:
                 self.pre_flag_rates.pop(0)
+
+            # Sustained-elevation gate: require CONSEC_HIGH_CP_REQUIRED days in a
+            # row above threshold before transitioning. A single anomalous day
+            # in a stable regime briefly spikes cp_prob; we don't want that to
+            # be treated as a candidate regime shift.
             if flagged:
+                self.consecutive_high_cp += 1
+            else:
+                self.consecutive_high_cp = 0
+
+            if self.consecutive_high_cp >= CONSEC_HIGH_CP_REQUIRED:
                 self.drift_status = "potential"
                 self.pending_flag_days = 1
+                self.consecutive_high_cp = 0
                 self.post_flag_rates = [y]
                 self.post_flag_cp_probs = [cp_prob]
             return
@@ -148,10 +170,11 @@ class BOCDDetector:
 
             if self.pending_flag_days >= CLASSIFICATION_WINDOW:
                 mean_cp = float(np.mean(self.post_flag_cp_probs))
-                # Compare the *recent* post-flag state (last ~2 obs) to pre-flag
-                # baseline: that's what tells us whether the regime is still
-                # different now, vs. the system having recovered.
-                tail = self.post_flag_rates[-2:] or self.post_flag_rates
+                # Compare the recent post-flag state (last DIRECTION_TAIL obs)
+                # to pre-flag baseline. Using a wider tail than the unit-test
+                # version because under realistic noise a 2-obs tail is
+                # dominated by single days.
+                tail = self.post_flag_rates[-DIRECTION_TAIL:] or self.post_flag_rates
                 recent_post = float(np.mean(tail))
                 pre_mean = (
                     float(np.mean(self.pre_flag_rates)) if self.pre_flag_rates else recent_post
@@ -202,6 +225,7 @@ class BOCDDetector:
         self.alpha = np.array([PRIOR_ALPHA])
         self.b = np.array([PRIOR_B])
         self.t = 0
+        self.consecutive_high_cp = 0
         self.pending_flag_days = 0
         self.drift_status = "stable"
         self.pre_flag_rates = []
@@ -223,6 +247,7 @@ class BOCDDetector:
             "alpha": self.alpha.tolist(),
             "b": self.b.tolist(),
             "t": self.t,
+            "consecutive_high_cp": self.consecutive_high_cp,
             "pending_flag_days": self.pending_flag_days,
             "drift_status": self.drift_status,
             "last_update_date": self.last_update_date,
@@ -242,6 +267,7 @@ class BOCDDetector:
         det.alpha = np.asarray(d["alpha"], dtype=float)
         det.b = np.asarray(d["b"], dtype=float)
         det.t = int(d.get("t", len(det.run_length_probs) - 1))
+        det.consecutive_high_cp = int(d.get("consecutive_high_cp", 0))
         det.pending_flag_days = int(d["pending_flag_days"])
         det.drift_status = d["drift_status"]
         det.last_update_date = d.get("last_update_date")

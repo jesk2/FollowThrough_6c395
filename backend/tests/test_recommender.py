@@ -162,3 +162,46 @@ def test_result_changed_flag_false_when_recommendation_matches_current():
     res = evaluate(_profile(beta_proxy=0.60, current_device=0))
     assert res.changed is False
     assert res.previous_device == 0
+
+
+# ----------------------------------------------------------------------
+# anti-thrash: drop guard on baseline path
+# ----------------------------------------------------------------------
+
+
+def test_baseline_drop_blocked_without_tenure():
+    """β-baseline can't drop a user who just escalated. Prevents thrashing
+    where a failure-streak escalates to L+1 and the very next check-in's
+    baseline calc immediately undoes it.
+    """
+    res = evaluate(_profile(beta_proxy=0.60, current_device=2, weeks_at_current_level=0))
+    # Baseline says L0 but user just got to L2 — guard blocks the drop
+    assert res.recommended_device == 2
+    assert res.changed is False
+    assert "drop guarded" in res.reason
+
+
+def test_baseline_drop_allowed_after_tenure():
+    """Same situation, but user has been at the level for ≥1 week."""
+    res = evaluate(_profile(beta_proxy=0.60, current_device=2, weeks_at_current_level=1))
+    assert res.recommended_device == 0
+    assert res.changed is True
+
+
+def test_drop_guard_does_not_block_increases():
+    """Increases (escalations) are always permitted, regardless of tenure."""
+    res = evaluate(_profile(beta_proxy=0.90, current_device=0, weeks_at_current_level=0))
+    assert res.recommended_device == 4
+    assert res.changed is True
+
+
+def test_drift_de_escalation_bypasses_drop_guard():
+    """Confirmed-improvement drift is one-shot; it should still de-escalate
+    even with no tenure (unlike baseline drops).
+    """
+    res = evaluate(_profile(
+        beta_proxy=0.70, current_device=2,
+        drift_flag="confirmed_improvement", weeks_at_current_level=0,
+    ))
+    assert res.recommended_device == 1
+    assert res.changed is True
