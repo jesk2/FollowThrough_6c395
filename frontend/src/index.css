@@ -1,3 +1,17 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap');
+
+@layer base {
+  html {
+    font-family: 'DM Sans', sans-serif;
+    background-color: #f7f6f3;
+    color: #1a1917;
+  }
+}
+
+@layer utilities {
+  .font-mono { font-family: 'DM Mono', monospace; }
+}
