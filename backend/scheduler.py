@@ -19,6 +19,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from backend import notifications
 from backend.database import SessionLocal
 from backend.ml import get_pending_reminders, on_device_change, run_reevaluation
+from backend.response_logic import NotificationDescriptor
 from backend.ml.bocd import (
     load_detector,
     mark_ticked,
@@ -38,7 +39,9 @@ def checkin_reminder_job():
     db = SessionLocal()
     try:
         for user, task, payload in get_pending_reminders(db):
-            notifications.send_reminder(user.email, payload["task_name"], payload["planned_start"])
+            notifications.send_notification(
+                user.email, NotificationDescriptor(kind="reminder", payload=payload)
+            )
             logger.info("Sent reminder to %s for task '%s'", user.email, task.name)
     except Exception:
         logger.exception("checkin_reminder_job failed")
@@ -88,11 +91,7 @@ def bocd_daily_job():
                 result = run_reevaluation(user, db)
                 if result.changed:
                     note = on_device_change(user, old_device, result.recommended_device)
-                    notifications.send_reminder(
-                        user.email,
-                        note.payload.get("message", "Your commitment level changed"),
-                        datetime.utcnow(),
-                    )
+                    notifications.send_notification(user.email, note)
 
         db.commit()
     except Exception:
@@ -110,11 +109,7 @@ def device_reeval_job():
             result = run_reevaluation(user, db)
             if result.changed:
                 note = on_device_change(user, old_device, result.recommended_device)
-                notifications.send_reminder(
-                    user.email,
-                    note.payload.get("message", "Your commitment level changed"),
-                    datetime.utcnow(),
-                )
+                notifications.send_notification(user.email, note)
                 logger.info(
                     "Weekly re-eval for %s: %d → %d (%s)",
                     user.email, old_device, result.recommended_device, result.reason,

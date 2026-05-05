@@ -31,9 +31,7 @@ def _apply_checkin_actions(user: models.User, actions, db: Session) -> None:
         user.streak = max(0, user.streak + actions.streak_delta)
 
     for note in actions.notifications:
-        # Side-effect: fire-and-forget. Today every kind logs to the same channel;
-        # the differentiation is in the payload `tone`.
-        notif_service.send_reminder(user.email, note.payload.get("task_name", note.kind), datetime.utcnow())
+        notif_service.send_notification(user.email, note)
 
 
 def _refresh_cf_and_beta(user: models.User, task: models.Task, completed: float) -> None:
@@ -102,11 +100,7 @@ def submit_checkin(
     result = run_reevaluation(current_user, db)
     if result.changed:
         note = on_device_change(current_user, old_device, result.recommended_device)
-        notif_service.send_reminder(
-            current_user.email,
-            note.payload.get("message", "Your commitment level changed"),
-            datetime.utcnow(),
-        )
+        notif_service.send_notification(current_user.email, note)
 
     db.commit()
     db.refresh(checkin)

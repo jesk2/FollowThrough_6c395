@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     supabase_url: str
     supabase_anon_key: str
     supabase_service_key: str
-    supabase_jwt_secret: str
+    supabase_jwt_secret: str = ""  # unused — token verification delegated to supabase.auth.get_user
     jwt_algorithm: str = "HS256"
 
     smtp_host: str = "smtp.gmail.com"
