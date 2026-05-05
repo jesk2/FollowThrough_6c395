@@ -91,3 +91,41 @@ def get_embedding(
         user=EmbeddingPoint(x=float(user_2d[0]), y=float(user_2d[1])),
         population=[EmbeddingPoint(x=float(p[0]), y=float(p[1])) for p in pop_2d],
     )
+
+# endpoint for CompletionChart
+from collections import defaultdict
+
+@router.get("/completion-history", response_model=list[dict])
+def get_completion_history(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Daily completion rates for the last 14 days."""
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=14)
+    checkins = (
+        db.query(models.Checkin)
+        .filter(
+            models.Checkin.user_id == current_user.id,
+            models.Checkin.checked_in_at >= cutoff,
+        )
+        .all()
+    )
+
+    # bucket checkins by day
+    by_day = defaultdict(list)
+    for c in checkins:
+        day = c.checked_in_at.date().isoformat()
+        by_day[day].append(c.completed)
+
+    # build one entry per day for the last 14 days
+    today = datetime.now(timezone.utc).date()
+    result = []
+    for i in range(13, -1, -1):
+        day = (today - timedelta(days=i)).isoformat()
+        values = by_day.get(day, [])
+        result.append({
+            "date": day,
+            "rate": round(sum(values) / len(values), 2) if values else None,
+            "count": len(values),
+        })
+    return result

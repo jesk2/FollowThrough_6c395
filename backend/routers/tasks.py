@@ -77,7 +77,6 @@ def list_tasks(
         total=len(tasks),
     )
 
-
 @router.get("/pending", response_model=TaskListResponse)
 def pending_tasks(
     current_user: models.User = Depends(get_current_user),
@@ -106,6 +105,20 @@ def pending_tasks(
         total=len(tasks),
     )
 
+@router.get("/{task_id}", response_model=TaskResponse)
+def get_task(
+    task_id: UUID,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    task = (
+        db.query(models.Task)
+        .filter(models.Task.id == task_id, models.Task.user_id == current_user.id)
+        .first()
+    )
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return _task_to_response(task, db)
 
 @router.put("/{task_id}/reschedule", response_model=RescheduleResponseSchema)
 def reschedule_task(
