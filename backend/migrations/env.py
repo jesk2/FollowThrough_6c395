@@ -1,8 +1,13 @@
 import os
 from logging.config import fileConfig
+from pathlib import Path
 
+from dotenv import load_dotenv
 from sqlalchemy import engine_from_config, pool
 from alembic import context
+
+# load .env from the backend/ directory (where alembic is run from)
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 # pull in all models so Alembic can see them
 from backend.models.db import Base  # noqa: F401
