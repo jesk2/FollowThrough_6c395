@@ -1,10 +1,3 @@
-import os
-import sys
-
-# ensure repo root is on sys.path so "from backend.X import Y" works
-# whether running from repo root (local) or from inside backend/ (Railway)
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
