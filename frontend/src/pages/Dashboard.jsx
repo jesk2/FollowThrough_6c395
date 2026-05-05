@@ -5,6 +5,7 @@
 //   return <div>Dashboard — TODO (Audrey)</div>;
 // }
 
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { usePendingTasks } from "../hooks/useTasks";
 import { useProfile } from "../hooks/useProfile";
@@ -12,6 +13,7 @@ import DeviceBadge from "../components/DeviceBadge";
 import BetaGauge from "../components/BetaGauge";
 import CompletionChart from "../components/CompletionChart";
 import TaskCard from "../components/TaskCard";
+import AddTaskModal from "../components/AddTaskModal";
 
 // ── flip to false once the backend is running ──────────────────────────────
 const USE_MOCK = true;
@@ -72,6 +74,8 @@ export default function Dashboard() {
   const profile = USE_MOCK ? MOCK_PROFILE : liveProfile;
   const pending = USE_MOCK ? MOCK_PENDING : (livePending?.tasks ?? []);
   const isLoading = USE_MOCK ? false : (profileLoading || tasksLoading);
+
+  const [showAddTask, setShowAddTask] = useState(false);
 
   // derive email from JWT as fallback if profile doesn't load yet
   const token = localStorage.getItem("access_token");
@@ -174,7 +178,7 @@ export default function Dashboard() {
               Needs check-in
             </h2>
             <button
-              onClick={() => navigate("/add-task")}
+              onClick={() => setShowAddTask(true)} // ← opens modal instead of navigating
               className="text-xs text-indigo-600 hover:text-indigo-700 font-medium transition-colors"
             >
               + Add task
@@ -197,6 +201,11 @@ export default function Dashboard() {
         </section>
 
       </main>
+    <AddTaskModal
+        isOpen={showAddTask}
+        onClose={() => setShowAddTask(false)}
+        deviceLevel={profile?.current_device}
+      />
     </div>
   );
 }
