@@ -1,40 +1,90 @@
-"""Unit tests for the CF model forward pass and embedding management. (Kaitlyn to expand)"""
-import numpy as np
+"""Unit tests for the CF adapter and the backend feature encoder.
+
+These tests cover only the paths that don't require trained ML artifacts
+(``cf_model.pt`` / ``ridge_probe.joblib`` / ``user_state.pt``), which are
+gitignored and absent from CI.
+"""
 import pytest
 
-from backend.ml.cf_model import K, get_user_embedding, set_user_embedding
-from backend.ml.features import encode_task
+from backend.ml.cf_model import K, get_user_embedding
+from backend.ml.features import CATEGORIES, DEADLINE_OPTIONS, encode_task
+from ml.inference.inference_api import TaskFeatures
 
 
-def test_encode_task_shape():
-    vec = encode_task("academic", "today", 3, 60, 0)
-    assert vec.shape == (13,)
-    assert vec.dtype == np.float32
+def test_user_embedding_dim_is_eight():
+    assert K == 8
 
 
-def test_encode_task_category_onehot():
-    vec = encode_task("exercise", "none", 1, 30, 5)
-    # exercise is index 1 in CATEGORIES
-    assert vec[1] == 1.0
-    assert vec[0] == 0.0
-    assert vec[2] == 0.0
-    assert vec[3] == 0.0
+def test_encode_task_returns_taskfeatures():
+    feat = encode_task(
+        category="academic",
+        deadline_pressure="today",
+        difficulty=3,
+        planned_duration=60,
+        days_until=0,
+    )
+    assert isinstance(feat, TaskFeatures)
 
 
-def test_encode_task_difficulty_range():
+def test_encode_task_difficulty_normalized():
     for diff in range(1, 6):
-        vec = encode_task("work", "this_week", diff, 45, 2)
-        assert 0.0 <= vec[7] <= 1.0
+        feat = encode_task(
+            category="work",
+            deadline_pressure="this_week",
+            difficulty=diff,
+            planned_duration=45,
+            days_until=2,
+        )
+        assert 0.0 <= feat.difficulty <= 1.0
+    # endpoints
+    lo = encode_task(category="work", deadline_pressure="none",
+                     difficulty=1, planned_duration=30, days_until=0)
+    hi = encode_task(category="work", deadline_pressure="none",
+                     difficulty=5, planned_duration=30, days_until=0)
+    assert lo.difficulty == pytest.approx(0.0)
+    assert hi.difficulty == pytest.approx(1.0)
 
 
-def test_user_embedding_roundtrip():
-    emb = np.random.randn(K).astype(np.float32)
-    set_user_embedding("test-user-123", emb)
-    retrieved = get_user_embedding("test-user-123")
-    assert retrieved is not None
-    np.testing.assert_array_equal(retrieved, emb)
+def test_encode_task_category_index_matches_order():
+    for i, cat in enumerate(CATEGORIES):
+        feat = encode_task(
+            category=cat,
+            deadline_pressure="none",
+            difficulty=2,
+            planned_duration=30,
+            days_until=1,
+        )
+        assert feat.category_index == i
 
 
-def test_unknown_user_embedding_returns_none():
-    result = get_user_embedding("user-that-does-not-exist")
-    assert result is None
+def test_encode_task_deadline_pressure_mapping():
+    expected = {"today": 0, "this_week": 1, "none": 2}
+    for label, idx in expected.items():
+        feat = encode_task(
+            category="personal",
+            deadline_pressure=label,
+            difficulty=1,
+            planned_duration=15,
+            days_until=0,
+        )
+        assert feat.deadline_pressure_index == idx
+    assert set(DEADLINE_OPTIONS) == set(expected.keys())
+
+
+def test_encode_task_rejects_bad_inputs():
+    with pytest.raises(ValueError):
+        encode_task(category="not_a_cat", deadline_pressure="today",  # type: ignore[arg-type]
+                    difficulty=3, planned_duration=30, days_until=0)
+    with pytest.raises(ValueError):
+        encode_task(category="academic", deadline_pressure="someday",  # type: ignore[arg-type]
+                    difficulty=3, planned_duration=30, days_until=0)
+    with pytest.raises(ValueError):
+        encode_task(category="academic", deadline_pressure="today",
+                    difficulty=0, planned_duration=30, days_until=0)
+    with pytest.raises(ValueError):
+        encode_task(category="academic", deadline_pressure="today",
+                    difficulty=6, planned_duration=30, days_until=0)
+
+
+def test_get_user_embedding_none_id_returns_none():
+    assert get_user_embedding(None) is None
