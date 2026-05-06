@@ -17,40 +17,83 @@ People:
 
 ## 1. Kaitlyn's `ml/` pipeline → Backend routers (unblocks Nicole's recommender)
 
-**Status:** Not wired. Backend imports legacy stubs that raise
-`NotImplementedError`; the calls are wrapped in try/except so check-ins
-succeed but `user.beta_proxy` never moves off `0.70`. Nicole's recommender
-β-baseline branch is therefore degenerate — every user looks the same to it.
+**Status:** Pretrained artifacts and inference API delivered; wiring in
+backend routers still pending. Kaitlyn finished her side and the
+simulation notebook now runs against the real probe end-to-end.
+
+**Kaitlyn-delivered (Apr 2026):**
+
+- [`ml/inference/inference_api.py`](ml/inference/inference_api.py) exposes
+  the four entry points the backend wiring expects:
+  `initialize_new_user() -> int`, `get_user_state(embedding_id) -> float`,
+  `predict_task(embedding_id, features) -> float`,
+  `incremental_update_api(embedding_id, features, completed) -> None`.
+  All take/return primitives — no PyTorch tensors at the boundary.
+- `TaskFeatures` Pydantic model with the exact field names called out
+  below: `difficulty`, `category_index`, `planned_duration_minutes`,
+  `days_until_planned_start`, `deadline_pressure_index`.
+- Pretrained artifacts under
+  [`ml/artifacts/`](ml/artifacts/): `cf_model.pt`, `user_state.pt`,
+  `ridge_probe.joblib`, `feature_stats.json` (the last two are not
+  optional — without them probe inference and feature normalization
+  fail).
+- Optional turnkey adapters under
+  [`backend/ml/`](backend/ml/) — `cf_model.py`, `probe.py`, `train.py`,
+  `features.py` are now thin wrappers over the `ml.inference` API,
+  preserving the existing router call signatures. Backend lead can keep
+  them or replace with direct `from ml.inference.inference_api ...`
+  imports — both work; adapters mean less router code changes, direct
+  imports mean one fewer indirection.
 
 **Owners:** Backend lead writes the wiring. Kaitlyn confirms the API
-shape ([`ml/inference/inference_api.py`](ml/inference/inference_api.py)).
-Nicole's code doesn't change.
+shape (done above). Nicole's code doesn't change.
 
-**Action items:**
+**Action items remaining (Backend lead):**
 
-- [ ] In [`backend/routers/checkins.py`](backend/routers/checkins.py),
-      replace 4 imports with
-      `from ml.inference.inference_api import initialize_new_user, get_user_state, incremental_update_api`
-- [ ] Rewrite `_refresh_cf_and_beta` to:
+- [ ] Decide: keep `backend/ml/` adapters or delete and import directly
+      from `ml.inference.inference_api`. (Adapters are wired up and
+      smoke-tested; choice is purely stylistic.)
+- [ ] Rewrite `_refresh_cf_and_beta` in
+      [`backend/routers/checkins.py`](backend/routers/checkins.py) to:
   1. Allocate `user.embedding_id` via `initialize_new_user()` if missing
-  2. Build a `TaskFeatures` Pydantic instance from the `Task` row
-     (Kaitlyn: confirm field names — difficulty, category_index,
-     planned_duration_minutes, days_until_planned_start,
-     deadline_pressure_index)
-  3. `incremental_update_api(embedding_id, features, completed)`
+     (defensive — production should allocate at signup, but this catches
+     pre-existing rows from the dev DB)
+  2. Build a `TaskFeatures` instance from the `Task` row
+     (`difficulty=(task.difficulty - 1)/4`, `category_index` from a
+     str→int map, etc. — see the patched cell 1 of
+     [`07_pipeline_simulation.ipynb`](notebooks/07_pipeline_simulation.ipynb)
+     for a working translation)
+  3. `incremental_update_api(user.embedding_id, features, completed)`
   4. `user.beta_proxy = get_user_state(user.embedding_id)`
 - [ ] In [`backend/routers/auth.py:signup`](backend/routers/auth.py),
       call `initialize_new_user()` after creating the User row, store the
-      returned int in `user.embedding_id` before commit
-- [ ] Delete the four legacy stubs: `backend/ml/cf_model.py`, `features.py`,
-      `probe.py`, `train.py` (no callers will remain)
-- [ ] Once wired, re-run
+      returned int in `user.embedding_id` before commit. (Idempotent if
+      called twice — embedding ids monotonically grow, so a duplicate
+      call just allocates an unused slot; the more important property
+      is "every user has one before their first check-in.")
+- [x] Re-run
       [`notebooks/07_pipeline_simulation.ipynb`](notebooks/07_pipeline_simulation.ipynb)
-      with the real probe instead of the mock-EMA β estimator
+      with the real probe — **done by Kaitlyn**. Notebook now imports
+      `ml.inference.inference_api`, isolates user-state in a temp dir
+      so production embeddings aren't mutated, and replaces the mock-EMA
+      β block with `incremental_update_api` + `get_user_state`. All five
+      scenarios execute end-to-end; plots and audit-log queries populate.
 
-**Estimated size:** ~20 lines, 30 min — assuming Kaitlyn's API works as
-documented. Risk: `numpy 2.4.4 / torch 2.3.0` ABI compatibility (see
-section 7) could break the import.
+**Finding from the rerun (worth knowing before launch):** with the real
+Ridge probe (α=1.0) and only 40–60 events per user, β_proxy stays
+within ~±0.02 of the population mean (0.70) regardless of true β. The
+mock-EMA tracked rolling completion more aggressively. Net effect on the
+recommender: the β-baseline branch will resolve to L1 for almost
+everyone in the first ~2 months; escalations to L3/L4 will be driven by
+the failure-streak and BOCD-drift branches instead. Probably fine —
+that's the conservative behavior we want for new users — but if the
+product team wants β to move faster, options are (a) lower
+`ridge_alpha` in pretrain, (b) raise the per-event learning rate in
+`IncrementalUpdateConfig`, or (c) both. Kaitlyn happy to discuss.
+
+**Estimated remaining size:** ~15 lines in routers, ~20 min. Risk: see
+§7 below — should be low since the current pin is `numpy>=1.26,<2.0`
+and Kaitlyn confirmed her artifacts load on that combo.
 
 ---
 
@@ -201,26 +244,26 @@ are nullable / have defaults — safe upgrade. CI workflow already runs it.
 
 ---
 
-## 7. Dependency pinning — `numpy 2.4.4` × `torch 2.3.0` (Backend lead)
+## 7. Dependency pinning — `numpy` × `torch 2.3.0` (Backend lead)
 
-**Status:** Latest backend-deps bump in
-[`backend/requirements.txt`](backend/requirements.txt) put `numpy` at
-`2.4.4` while `torch` is still `2.3.0`. torch 2.3.0 was built against
-numpy 1.x and there are documented import-time failures on numpy 2.x.
-CI passed because nothing in the test suite actually exercises the
-torch-heavy paths — but Kaitlyn's `ml/inference/inference_api.py` does
-load torch at first call. This will likely blow up the moment item 1
-(wiring the ML pipeline) lands.
+**Status:** Likely no longer broken.
+[`backend/requirements.txt`](backend/requirements.txt) currently pins
+`numpy>=1.26,<2.0`, which is compatible with `torch 2.3.0`. The original
+note here predated that pin — leaving the section in place so the CI
+test idea isn't lost.
 
-**Owners:** Backend lead, in consultation with Kaitlyn.
+Kaitlyn confirmed (May 2026): training and inference were done against
+`torch 2.3.0 + numpy 1.26.4`; artifacts in `ml/artifacts/` load cleanly
+under that combo. If anyone bumps `numpy` past 2.0 again, also bump
+`torch` to ≥2.4 (where the numpy-2 ABI is fixed) and re-run
+[`07_pipeline_simulation.ipynb`](notebooks/07_pipeline_simulation.ipynb)
+to verify.
+
+**Owners:** Backend lead.
 
 **Action items:**
 
-- [ ] Either bump `torch>=2.4` (which supports numpy 2.x) or pin
-      `numpy<2`. Coordinate with Kaitlyn since her training was likely
-      done against the older combination
-- [ ] Re-run `pip install -r backend/requirements.txt` cleanly and
-      verify `python -c "import torch, numpy; torch.zeros(3)"` works
-      end-to-end
+- [x] Confirm current `requirements.txt` keeps `numpy<2` while torch is
+      pinned at 2.3.0 — done; pin is `numpy>=1.26,<2.0`.
 - [ ] Add a CI test that imports `ml.inference.inference_api` so future
-      regressions are caught
+      ABI regressions are caught at PR time, not at first-request time.

@@ -1,47 +1,67 @@
-"""
-Linear probe: user embedding → beta proxy — IMPLEMENT THIS (Kaitlyn).
+"""Backend-facing β-probe interface — adapter over ``ml.inference``.
 
-After pretraining, fit a Ridge regression from synthetic user embeddings to their known
-true beta values. This probe is fixed after pretraining — it does not get retrained
-as real users arrive.
+The Ridge probe was fit during pretraining (see ``ml/training/pretrain.py``)
+and shipped as ``ml/artifacts/ridge_probe.joblib``. The inference layer
+loads it lazily on first use; this module just exposes the call
+shape the routers expect.
 
-The backend calls get_beta_proxy() from the checkins router.
-Do not change that function signature.
+There are two ways to ask for a β estimate:
+
+    get_beta_for_user(embedding_id)   — preferred; uses the live store
+    get_beta_proxy(user_embedding)    — legacy stub-shaped signature
+
+Use the first whenever the caller has the user's ``embedding_id`` (which
+is everywhere — it's on the User row). The second exists only because
+the original placeholder stub took a raw embedding vector; we keep it
+working for backward compatibility but it always returns the same value
+as ``get_beta_for_user`` would for the matching id.
 """
 from __future__ import annotations
 
-import numpy as np
+import logging
 from typing import Optional
 
+import numpy as np
 
-# Fitted Ridge regression coefficients — loaded at startup after pretraining
-_probe_weights: Optional[np.ndarray] = None  # shape (k,)
-_probe_bias: float = 0.0
+from ml.inference.inference_api import _ensure_loaded, get_user_state
+
+logger = logging.getLogger(__name__)
+
+POPULATION_MEAN_BETA: float = 0.70  # fallback when probe is unavailable
 
 
-def fit_probe(embeddings: np.ndarray, beta_values: np.ndarray) -> None:
-    """
-    Fit the Ridge regression probe on synthetic data.
+def _probe():
+    """Return the loaded BetaProbe (private accessor)."""
+    from ml.inference import inference_api as api
+    _ensure_loaded()
+    assert api._PROBE is not None
+    return api._PROBE
 
-    Args:
-        embeddings: shape (n_users, k) — synthetic user embeddings after pretraining
-        beta_values: shape (n_users,)  — corresponding true beta values
-    """
-    raise NotImplementedError("Implement probe fitting — Kaitlyn")
+
+def get_beta_for_user(embedding_id: Optional[int]) -> float:
+    """β proxy for a known user. Returns the population mean if id is missing."""
+    if embedding_id is None:
+        return POPULATION_MEAN_BETA
+    try:
+        return get_user_state(int(embedding_id))
+    except KeyError:
+        logger.warning(
+            "Unknown embedding_id=%s in get_beta_for_user; returning population mean",
+            embedding_id,
+        )
+        return POPULATION_MEAN_BETA
 
 
 def get_beta_proxy(user_embedding: np.ndarray) -> float:
-    """
-    Map a user embedding to an interpretable scalar beta proxy in [0, 1].
+    """Map a raw embedding vector → β proxy via the Ridge probe.
 
-    Args:
-        user_embedding: shape (k,)
-
-    Returns:
-        Scalar in [0, 1], clipped to valid range.
+    Kept for backward compatibility with the original stub signature.
+    Prefer ``get_beta_for_user(embedding_id)`` when you have the id.
     """
-    if _probe_weights is None:
-        # probe not fitted yet — return population mean
-        return 0.70
-    raw = float(np.dot(_probe_weights, user_embedding) + _probe_bias)
-    return float(np.clip(raw, 0.0, 1.0))
+    if user_embedding is None:
+        return POPULATION_MEAN_BETA
+    try:
+        return float(_probe().predict(np.asarray(user_embedding, dtype=np.float32))[0])
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning("Probe predict failed (%s); returning population mean", exc)
+        return POPULATION_MEAN_BETA

@@ -25,12 +25,6 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-import matplotlib
-
-# Use a non-interactive backend so this module is importable in headless
-# environments (CI, containers) where no display is attached.
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from torch import nn
@@ -321,6 +315,13 @@ def _save_loss_curves(
     png_path: Path,
     bayes_floor: Optional[float] = None,
 ) -> None:
+    # Lazy-import matplotlib here so that ``import ml.training.pretrain``
+    # is cheap on the inference path (the backend container imports a
+    # few constants from this module — it must not pay matplotlib's
+    # startup cost just to do that).
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
     """Render the train/val loss curves (and LR overlay) to a PNG.
 
     If ``bayes_floor`` is provided (the entropy of P(y|x) under the data

@@ -19,20 +19,29 @@ services:
       retries: 5
 
   backend:
-    build: ./backend
+    # Build context is the repo root so the Dockerfile can COPY both
+    # `backend/` and the sibling `ml/` package + its pretrained artifacts.
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
       DATABASE_URL: postgresql://followthrough:followthrough@db:5432/followthrough
+      PYTHONPATH: /workspace
     env_file:
       - .env
     depends_on:
       db:
         condition: service_healthy
     volumes:
-      - ./backend:/app
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+      # Mount source for dev-mode hot reload. The `ml/` mount also lets
+      # ops swap in a freshly trained model without rebuilding the image:
+      # drop new artifacts into ./ml/artifacts and restart the container.
+      - ./backend:/workspace/backend
+      - ./ml:/workspace/ml
+    command: uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 
 volumes:
   postgres_data:

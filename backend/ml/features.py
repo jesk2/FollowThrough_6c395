@@ -1,64 +1,66 @@
-"""
-Task feature engineering — IMPLEMENT THIS (Kaitlyn).
+"""Translate backend domain types → ml.inference TaskFeatures.
 
-encode_task() must return a 13-dimensional numpy array.
+The backend speaks human-readable strings + a 1–5 difficulty scale; the
+ML inference layer speaks integer indices + difficulty ∈ [0, 1] +
+log-normalized durations. This adapter is the only place the two
+representations meet.
 
-Feature layout (13 dims):
-  [0:4]  category one-hot    (academic, exercise, work, personal)
-  [4:7]  deadline_pressure one-hot  (today, this_week, none)
-  [7]    difficulty normalized to [0, 1]  → (difficulty - 1) / 4
-  [8]    log(planned_duration + 1) normalized
-  [9]    log(days_until + 1) normalized
-  [10:13] reserved (zeros for now)
+Note on schema version: the original placeholder spec said the task
+feature vector was 13-dimensional. The actual trained model uses **10
+dimensions** (1 difficulty + 4 category + 1 duration + 1 delay +
+3 deadline-pressure). Callers should stop touching the raw vector and
+go through ``encode_task`` below, which returns a ``TaskFeatures``
+Pydantic model the inference API consumes directly.
 """
 from __future__ import annotations
 
-import math
-import numpy as np
+from typing import Literal
 
-CATEGORIES = ["academic", "exercise", "work", "personal"]
-DEADLINE_OPTIONS = ["today", "this_week", "none"]
+# Re-export the schema so backend code can type-annotate against it.
+from ml.inference.inference_api import TaskFeatures
+
+CATEGORIES: tuple[str, ...] = ("academic", "exercise", "work", "personal")
+DEADLINE_OPTIONS: tuple[str, ...] = ("today", "this_week", "none")
+
+# Map backend's "none" deadline → ML's "later" bucket (index 2).
+_DEADLINE_TO_INDEX: dict[str, int] = {
+    "today": 0,
+    "this_week": 1,
+    "none": 2,
+}
 
 
 def encode_task(
-    category: str,
-    deadline_pressure: str,
+    *,
+    category: Literal["academic", "exercise", "work", "personal"],
+    deadline_pressure: Literal["today", "this_week", "none"],
     difficulty: int,
     planned_duration: int,
     days_until: int,
-) -> np.ndarray:
-    """
-    Encode a task into a 13-dimensional feature vector.
+) -> TaskFeatures:
+    """Build the inference-API task representation from backend domain types.
 
     Args:
-        category: one of "academic", "exercise", "work", "personal"
-        deadline_pressure: one of "today", "this_week", "none"
-        difficulty: integer 1–5
-        planned_duration: minutes (> 0)
-        days_until: days from now until planned_start (>= 0)
+        category: one of ``CATEGORIES``.
+        deadline_pressure: one of ``DEADLINE_OPTIONS``.
+        difficulty: integer 1–5; mapped to a float in [0, 1].
+        planned_duration: minutes, must be positive.
+        days_until: whole days from now until ``planned_start``, ≥ 0.
 
     Returns:
-        np.ndarray of shape (13,), dtype float32
+        A validated ``TaskFeatures`` Pydantic model.
     """
-    vec = np.zeros(13, dtype=np.float32)
+    if category not in CATEGORIES:
+        raise ValueError(f"unknown category: {category!r}")
+    if deadline_pressure not in DEADLINE_OPTIONS:
+        raise ValueError(f"unknown deadline_pressure: {deadline_pressure!r}")
+    if not 1 <= difficulty <= 5:
+        raise ValueError(f"difficulty must be in [1, 5]: {difficulty}")
 
-    # category one-hot [0:4]
-    if category in CATEGORIES:
-        vec[CATEGORIES.index(category)] = 1.0
-
-    # deadline one-hot [4:7]
-    if deadline_pressure in DEADLINE_OPTIONS:
-        vec[4 + DEADLINE_OPTIONS.index(deadline_pressure)] = 1.0
-
-    # difficulty [7]
-    vec[7] = (difficulty - 1) / 4.0
-
-    # log-normalized planned duration [8]
-    vec[8] = math.log1p(planned_duration) / math.log1p(480)  # normalize against 8h max
-
-    # log-normalized days until [9]
-    vec[9] = math.log1p(days_until) / math.log1p(30)  # normalize against 30-day horizon
-
-    # dims [10:13] reserved — stay zero
-
-    return vec
+    return TaskFeatures(
+        difficulty=(difficulty - 1) / 4.0,            # 1..5 → 0.0..1.0
+        category_index=CATEGORIES.index(category),
+        planned_duration_minutes=float(planned_duration),
+        days_until_planned_start=int(days_until),
+        deadline_pressure_index=_DEADLINE_TO_INDEX[deadline_pressure],
+    )

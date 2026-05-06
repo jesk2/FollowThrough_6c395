@@ -1,0 +1,38 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+
+# --- Local secrets (compose injects via env_file) ---
+.env
+.env.local
+
+# --- VCS ---
+.git/
+.gitignore
+.github/
+
+# --- Tests + dev tooling ---
+backend/tests/
+backend/.dockerignore
+.pytest_cache/
+
+# --- Frontend (separate deploy) ---
+frontend/
+node_modules/
+
+# --- ML notebooks & generated figures (not needed at runtime) ---
+ml/notebooks/
+notebooks/
+
+# --- Docs ---
+*.md
+docker-compose.yml
