@@ -1,6 +1,12 @@
 import uuid
 
 import httpx
+
+try:
+    from ml.inference.inference_api import initialize_new_user as _init_user
+    _ML_AVAILABLE = True
+except Exception:
+    _ML_AVAILABLE = False
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -35,7 +41,8 @@ def signup(body: SignupRequest, db: Session = Depends(get_db)):
     user_id = uuid.UUID(data["id"])
     existing = db.query(models.User).filter(models.User.id == user_id).first()
     if not existing:
-        db.add(models.User(id=user_id, email=body.email))
+        embedding_id = _init_user() if _ML_AVAILABLE else None
+        db.add(models.User(id=user_id, email=body.email, embedding_id=embedding_id))
         db.commit()
 
     # session is None until email is confirmed — return empty token in that case

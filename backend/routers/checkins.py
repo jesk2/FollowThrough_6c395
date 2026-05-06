@@ -10,10 +10,19 @@ from backend.dependencies import get_current_user, get_db
 from backend.models import db as models
 from backend.models.schemas import CheckinCreate, CheckinHistoryResponse, CheckinResponse
 from backend.ml import process_checkin, run_reevaluation, on_device_change
-from backend.ml.cf_model import get_user_embedding
-from backend.ml.features import encode_task
-from backend.ml.probe import get_beta_proxy
-from backend.ml.train import incremental_update
+
+try:
+    from ml.inference.inference_api import (
+        TaskFeatures,
+        get_user_state,
+        incremental_update_api,
+    )
+    _ML_AVAILABLE = True
+except Exception:
+    _ML_AVAILABLE = False
+
+_CATEGORY_INDEX = {"academic": 0, "exercise": 1, "work": 2, "personal": 3}
+_DEADLINE_INDEX = {"today": 0, "this_week": 1, "none": 2}
 
 logger = logging.getLogger(__name__)
 
@@ -36,26 +45,22 @@ def _apply_checkin_actions(user: models.User, actions, db: Session) -> None:
 
 def _refresh_cf_and_beta(user: models.User, task: models.Task, completed: float) -> None:
     """Best-effort CF embedding + beta probe refresh; failures are logged only."""
+    if not _ML_AVAILABLE or user.embedding_id is None:
+        return
     try:
         days_until = max(
             0,
             (task.planned_start - datetime.now(timezone.utc).replace(tzinfo=None)).days,
         )
-        task_features = encode_task(
-            category=task.category,
-            deadline_pressure=task.deadline_pressure,
-            difficulty=task.difficulty,
-            planned_duration=task.planned_duration,
-            days_until=days_until,
+        features = TaskFeatures(
+            difficulty=float(task.difficulty - 1) / 4.0,
+            category_index=_CATEGORY_INDEX.get(task.category, 0),
+            planned_duration_minutes=float(task.planned_duration),
+            days_until_planned_start=days_until,
+            deadline_pressure_index=_DEADLINE_INDEX.get(task.deadline_pressure, 2),
         )
-        incremental_update(
-            user_id=str(user.id),
-            task_features=task_features,
-            completed=completed,
-        )
-        embedding = get_user_embedding(str(user.id))
-        if embedding is not None:
-            user.beta_proxy = float(get_beta_proxy(embedding))
+        incremental_update_api(user.embedding_id, features, float(completed))
+        user.beta_proxy = get_user_state(user.embedding_id)
     except Exception as exc:
         logger.warning("CF/beta update failed for user %s: %s", user.id, exc)
 
