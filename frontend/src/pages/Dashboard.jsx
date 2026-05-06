@@ -14,6 +14,7 @@ import BetaGauge from "../components/BetaGauge";
 import CompletionChart from "../components/CompletionChart";
 import TaskCard from "../components/TaskCard";
 import AddTaskModal from "../components/AddTaskModal";
+import TaskSidebar from "../components/TaskSidebar";
 
 // ── flip to false once the backend is running ──────────────────────────────
 const USE_MOCK = false;
@@ -118,8 +119,10 @@ export default function Dashboard() {
         </div>
       </nav>
 
-      <main className="max-w-2xl mx-auto px-6 py-10 flex flex-col gap-8">
-
+      {/* <main className="max-w-2xl mx-auto px-6 py-10 flex flex-col gap-8"> */}
+      <main className="max-w-5xl mx-auto px-6 py-10 flex flex-row gap-8 items-start">
+      <TaskSidebar />
+      <div className="flex-1 flex flex-col gap-8">
         {/* ── Greeting ───────────────────────────────────────────────── */}
         <div>
           <h1 className="text-2xl font-semibold">
@@ -199,7 +202,7 @@ export default function Dashboard() {
             </div>
           )}
         </section>
-
+      </div>
       </main>
     <AddTaskModal
         isOpen={showAddTask}
