@@ -15,6 +15,7 @@ import CompletionChart from "../components/CompletionChart";
 import TaskCard from "../components/TaskCard";
 import AddTaskModal from "../components/AddTaskModal";
 import TaskSidebar from "../components/TaskSidebar";
+import Logo from "../components/Logo";
 
 // ── flip to false once the backend is running ──────────────────────────────
 const USE_MOCK = false;
@@ -98,7 +99,7 @@ export default function Dashboard() {
     <div className="min-h-screen bg-surface">
       {/* ── Top nav ────────────────────────────────────────────────────── */}
       <nav className="bg-card border-b border-border px-6 py-4 flex items-center justify-between">
-        <span className="font-semibold tracking-tight">FollowThrough</span>
+        <Logo />
         <div className="flex items-center gap-4">
           <span className="text-sm text-ink-secondary">{email}</span>
           <button

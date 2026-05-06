@@ -7,6 +7,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import client from "../api/client";
+import Logo from "../components/Logo";
 
 export default function Login() {
   const navigate = useNavigate();
@@ -33,7 +34,7 @@ export default function Login() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
       <div className="bg-white p-8 rounded-xl shadow-sm w-full max-w-sm">
-        <h1 className="text-2xl font-semibold mb-6">FollowThrough</h1>
+        <div className="mb-6"><Logo size="lg" /></div>
 
         {error && (
           <p className="text-red-600 text-sm mb-4">{error}</p>
